@@ -1,0 +1,48 @@
+{
+  "name": "dsh-delete",
+  "version": "0.1.0",
+  "description": "给 DSH（DeepSeek Harness）会话列表加一个「删除对话」菜单项与 Ctrl+Alt+D 快捷键，带二次确认，真正从磁盘删除。",
+  "license": "MIT",
+  "author": "Aland",
+  "type": "module",
+  "icon": "./icon.svg",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "bundle",
+    "session",
+    "delete"
+  ],
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./src/client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "src",
+    "locale",
+    "icon.svg",
+    "cordis.patch.yml",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-shortcuts"
+      ]
+    }
+  }
+}

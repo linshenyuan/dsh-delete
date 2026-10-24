@@ -1,0 +1,6 @@
+# dsh-delete bundle patch.
+#
+# 在 profile 的 dsh.profile.bundles 里列出本包时，这一层被应用。
+- insert:
+    - id: dsh-delete
+      name: 'dsh-delete'
