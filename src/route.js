@@ -122,12 +122,14 @@ export async function httpBridge(req, res, fetchHandler, maxRequestBodyBytes) {
   }
 
   const url = new URL(req.url ?? "/", "http://dsh.internal");
+  const method = req.method ?? "GET";
+  const bodyless = method === "GET" || method === "HEAD";
   const request = new Request(url, {
-    method: req.method ?? "GET",
+    method,
     headers: Object.fromEntries(
       Object.entries(req.headers).filter(([, value]) => typeof value === "string"),
     ),
-    ...(chunks.length > 0 ? { body: Buffer.concat(chunks) } : {}),
+    ...(bodyless || chunks.length === 0 ? {} : { body: Buffer.concat(chunks) }),
     signal: abort.signal,
   });
 
@@ -154,13 +156,23 @@ export async function httpBridge(req, res, fetchHandler, maxRequestBodyBytes) {
   res.end();
 }
 
+function hostnameOfHostHeader(host) {
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    return end === -1 ? undefined : host.slice(1, end);
+  }
+  const colon = host.lastIndexOf(":");
+  return colon === -1 ? host : host.slice(0, colon);
+}
+
 function isTrustedLoopbackRequest(req) {
   const host = req.headers?.host;
   if (typeof host !== "string") return false;
-  if (!LOOPBACK_HOSTNAMES.has(host.split(":")[0])) return false;
+  const hostname = hostnameOfHostHeader(host);
+  if (hostname === undefined || !LOOPBACK_HOSTNAMES.has(hostname)) return false;
   if (req.headers["sec-fetch-site"] === "cross-site") return false;
   const origin = req.headers.origin;
-  if (origin === undefined) return true;
+  if (origin === undefined) return false;
   try {
     return new URL(origin).host === host;
   } catch {

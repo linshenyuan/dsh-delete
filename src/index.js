@@ -20,11 +20,11 @@ export function apply(ctx, config = {}) {
   };
 
   ctx.inject(["connection", "webServer"], (panelCtx) => {
-
     const handler = createHandler({
       logger,
       workspaceRegistry: panelCtx.get("workspaceRegistry") ?? null,
       notifyRemoved,
+      getAgents: () => panelCtx.get("agents") ?? null,
     });
 
     panelCtx.effect(

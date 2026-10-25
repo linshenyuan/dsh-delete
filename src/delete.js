@@ -79,6 +79,7 @@ export function createHandler({
   logger = null,
   workspaceRegistry = null,
   notifyRemoved = null,
+  getAgents = null,
 } = {}) {
 
   let deleting = false;
@@ -103,44 +104,60 @@ export function createHandler({
       return fail("dsh-delete/busy", "已有删除在进行中，请稍后重试", { sessionId });
     }
 
-    const located = await locateSession(sessionId);
-    if (located === null) {
-      return fail("dsh-delete/not-found", "找不到该会话的磁盘目录", { sessionId });
-    }
-    if (located.linked) {
-
-      logger?.warn?.(`dsh-delete: 拒绝删除符号链接/junction: ${located.dir}`);
-      return fail("dsh-delete/not-a-directory", "该会话目录是符号链接，出于安全考虑拒绝删除", {
-        sessionId,
-      });
-    }
-
     deleting = true;
     try {
-      await rm(located.dir, { recursive: true, force: false, maxRetries: 2 });
-    } catch (error) {
-      const code = error?.code ?? "UNKNOWN";
-      logger?.warn?.(`dsh-delete: 删除会话 ${sessionId} 失败 (${code}): ${String(error)}`);
-      return fail(
-        "dsh-delete/delete-failed",
-        `删除失败（${code}）。如果该对话正在运行，请先切到别的对话再试。`,
-        { sessionId, code },
-      );
+      let agent;
+      try {
+        agent = getAgents?.()?.get?.(sessionId);
+      } catch (error) {
+        logger?.warn?.(`dsh-delete: 查询会话运行状态失败: ${String(error)}`);
+      }
+      if (agent?.status === "running") {
+        logger?.warn?.(`dsh-delete: 拒绝删除正在运行的会话 ${sessionId}`);
+        return fail(
+          "dsh-delete/session-running",
+          "该对话正在运行，请先停止它或切到别的对话再试。",
+          { sessionId },
+        );
+      }
+
+      const located = await locateSession(sessionId);
+      if (located === null) {
+        return fail("dsh-delete/not-found", "找不到该会话的磁盘目录", { sessionId });
+      }
+      if (located.linked) {
+        logger?.warn?.(`dsh-delete: 拒绝删除符号链接/junction: ${located.dir}`);
+        return fail("dsh-delete/not-a-directory", "该会话目录是符号链接，出于安全考虑拒绝删除", {
+          sessionId,
+        });
+      }
+
+      try {
+        await rm(located.dir, { recursive: true, force: false, maxRetries: 2 });
+      } catch (error) {
+        const code = error?.code ?? "UNKNOWN";
+        logger?.warn?.(`dsh-delete: 删除会话 ${sessionId} 失败 (${code}): ${String(error)}`);
+        return fail(
+          "dsh-delete/delete-failed",
+          `删除失败（${code}）。如果该对话正在运行，请先切到别的对话再试。`,
+          { sessionId, code },
+        );
+      }
+
+      const cacheDropped = await dropProjectionCache(sessionId, logger);
+      await forgetInWorkspace(workspaceRegistry, sessionId, logger);
+
+      try {
+        notifyRemoved?.(sessionId);
+      } catch (error) {
+        logger?.warn?.(`dsh-delete: 广播 api-session/removed 失败: ${String(error)}`);
+      }
+
+      logger?.info?.(`dsh-delete: 已删除会话 ${sessionId} (${located.dir})`);
+
+      return ok({ deleted: true, sessionId, project: located.project, cacheDropped });
     } finally {
       deleting = false;
     }
-
-    const cacheDropped = await dropProjectionCache(sessionId, logger);
-    await forgetInWorkspace(workspaceRegistry, sessionId, logger);
-
-    try {
-      notifyRemoved?.(sessionId);
-    } catch (error) {
-      logger?.warn?.(`dsh-delete: 广播 api-session/removed 失败: ${String(error)}`);
-    }
-
-    logger?.info?.(`dsh-delete: 已删除会话 ${sessionId} (${located.dir})`);
-
-    return ok({ deleted: true, sessionId, project: located.project, cacheDropped });
   };
 }

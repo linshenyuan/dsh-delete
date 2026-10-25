@@ -16,6 +16,8 @@
 - 二次确认弹窗：显示会话标题、不可恢复提示、红色描边的删除按钮。
 - 支持 `Esc` 关闭弹窗，打开时自动聚焦。
 - 删除时同步清理三处：会话目录、投影缓存、`workspace.json` 里的归档/置顶名单。
+- 删除前检查会话是否正在运行（`ctx.agents.get(id).status === "running"`），正在运行直接拒绝 ——
+  否则 Linux/macOS 上 `rm` 会立即成功，而 Agent 还在往已删文件里写，造成静默数据丢失。
 - 删除完成后广播 `api-session/removed`，侧边栏那一行**当场消失**，不刷新页面。
 - 中英文双语（`locale/zh.json`、`locale/en.json`），并带 `meta.title` / `meta.description` 与图标。
 
@@ -24,7 +26,9 @@
 - `sessionId` 必须匹配 `^(?:session-)?<UUID>$`，拼出的路径 `resolve` 后必须仍在 sessions 根下。
 - 用 `lstat` 判本体，符号链接 / junction 直接拒绝删除。
 - 每个请求先过 `connection.requestRejection`（Host/Origin 栅栏 + 登录 cookie），拿不到栅栏则退化为 loopback 判定。
+- 回退栅栏：Host 必须解析为回环地址（含 IPv6 `[::1]`），**缺少 `Origin` 一律拒绝**，`Origin` 必须与 Host 一致。
 - 请求体 `content-length` 与流式累计双上限 64 KiB。
+- `GET` / `HEAD` 不带 body 构造请求，非法方法返回 404 而不是 500。
 - 宿主侧串行化，同时只允许一个删除在跑。
 - 响应不回传绝对路径。
 
@@ -39,3 +43,7 @@
 - 按官方规范不再加载 `@deepseek-ai/dsh-client-ui-primitives`，控件全部自绘。
 - 早期版本用 `window.location.reload()` 更新列表，已改为广播 `api-session/removed`。
 - 会话 id 存在 `session-<uuid>` 与裸 `<uuid>` 两种形态，只认裸 UUID 会漏掉一半。
+- 并发删除的互斥标志在第一个 `await` 之后才置位，两个请求能同时通过检查；
+  已改为 `await` 之前置位，并用 `try/finally` 保证任何分支都会释放。
+- 回退栅栏三处：IPv6 `[::1]` 恒被拒、缺 `Origin` 直接放行、`GET` 带 body 返回 500。
+- 不检测会话是否正在运行，只靠 `rm` 失败兜底 —— 该兜底只在 Windows 成立。
