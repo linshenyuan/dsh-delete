@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Delete Conversation",
-    "description": "Adds a \"Delete conversation\" item to the session context menu, with Ctrl+Alt+D as the shortcut. DSH only offers archiving, not deletion; this plugin removes the session directory from disk, so it asks for confirmation first. Deletion is irreversible."
+    "description": "Adds \"Delete conversation\" and \"Delete multiple…\" to the session context menu, with Ctrl+Alt+D and Ctrl+Alt+Shift+D. DSH only offers archiving, not deletion; this plugin removes session directories from disk, so it asks for confirmation first. Deletion is irreversible. Batch deletion is capped at 5 per run and starts with nothing selected."
   }
 }

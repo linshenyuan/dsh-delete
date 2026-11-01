@@ -1,7 +1,7 @@
 {
   "name": "dsh-delete",
-  "version": "0.1.0",
-  "description": "给 DSH（DeepSeek Harness）会话列表加一个「删除对话」菜单项与 Ctrl+Alt+D 快捷键，带二次确认，真正从磁盘删除。",
+  "version": "0.2.0",
+  "description": "给 DSH（DeepSeek Harness）会话列表加「删除对话」与「批量删除…」菜单项，快捷键 Ctrl+Alt+D / Ctrl+Alt+Shift+D，带二次确认，真正从磁盘删除。",
   "license": "MIT",
   "author": "Aland",
   "type": "module",
@@ -12,7 +12,8 @@
     "plugin",
     "bundle",
     "session",
-    "delete"
+    "delete",
+    "batch"
   ],
   "exports": {
     ".": "./src/index.js",

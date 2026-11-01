@@ -16,6 +16,13 @@ window.__ModuleLoader__.load({
 
 		const SHORTCUT_FALLBACK = { keys: "Ctrl + Alt + D", aria: "Control+Alt+D" };
 
+		const BATCH_SHORTCUT_ID = "session.deleteMany";
+
+		const BATCH_SHORTCUT_FALLBACK = { keys: "Ctrl + Alt + Shift + D", aria: "Control+Alt+Shift+D" };
+
+		/** 与 delete.js 的 MAX_BATCH 保持一致。 */
+		const MAX_BATCH = 5;
+
 		const NOOP_HOOK = () => undefined;
 
 		const identitySelector = (value) => value;
@@ -32,6 +39,20 @@ window.__ModuleLoader__.load({
 			close: "关闭",
 			noSession: "没有可删除的对话",
 			failed: "删除失败",
+
+			batchDelete: "批量删除…",
+			batchTitle: "批量删除对话",
+			batchDesc: "勾选要删除的对话。会话记录会从磁盘上永久删除，无法恢复。",
+			batchEmpty: "当前没有可删除的对话。",
+			batchCount: "已选 {count} / 上限 {max}",
+			batchTotal: "共 {total} 个对话",
+			batchLimit: "一次最多删 {max} 个，已到上限。",
+			batchCurrent: "当前",
+			batchBlank: "空对话",
+			batchConfirm: "删除 {count} 个",
+			batchDeleting: "正在删除 {count} 个…",
+			batchSkipped: "以下 {count} 个没有删掉：",
+			batchAllFailed: "一个都没删掉，请检查后重试。",
 		};
 
 		const en = {
@@ -46,6 +67,20 @@ window.__ModuleLoader__.load({
 			close: "Close",
 			noSession: "No conversation to delete",
 			failed: "Delete failed",
+
+			batchDelete: "Delete multiple…",
+			batchTitle: "Delete multiple conversations",
+			batchDesc: "Select the conversations to delete. They will be permanently removed from disk. This cannot be undone.",
+			batchEmpty: "There is no conversation to delete.",
+			batchCount: "{count} selected / max {max}",
+			batchTotal: "{total} conversations",
+			batchLimit: "You can delete at most {max} at a time.",
+			batchCurrent: "current",
+			batchBlank: "empty",
+			batchConfirm: "Delete {count}",
+			batchDeleting: "Deleting {count}…",
+			batchSkipped: "{count} could not be deleted:",
+			batchAllFailed: "Nothing was deleted. Please check and retry.",
 		};
 
 		function format(template, params) {
@@ -92,6 +127,9 @@ window.__ModuleLoader__.load({
 
 		const pending = createSnapshotStore(null);
 
+		/** 批量删除弹窗的开关状态；`{open:true}` 表示打开。 */
+		const batchPending = createSnapshotStore(null);
+
 		const CSS = `
 .dsh-del-menu-wrap{position:relative}
 .dsh-del-menu-sep{height:.5px;margin:3px 2px;background:var(--dsw-alias-border-l2)}
@@ -122,6 +160,17 @@ window.__ModuleLoader__.load({
 .dsh-del-btn-outline:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
 .dsh-del-btn-danger{border:.5px solid var(--dsw-alias-state-error-primary);background:transparent;color:var(--dsw-alias-state-error-primary)}
 .dsh-del-btn-danger:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger)}
+
+.dsh-del-batch-list{display:flex;flex-direction:column;gap:1px;max-height:min(46vh,300px);overflow-y:auto;margin:2px -6px;padding:2px 6px}
+.dsh-del-batch-row{display:flex;align-items:center;gap:8px;min-height:30px;padding:4px;border-radius:var(--dsw-radius-sm);cursor:pointer;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary)}
+.dsh-del-batch-row:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dsh-del-batch-row.is-disabled{opacity:.45;cursor:not-allowed}
+.dsh-del-batch-row.is-disabled:hover{background:transparent}
+.dsh-del-batch-check{flex:none;width:14px;height:14px;margin:0;accent-color:var(--dsw-alias-state-error-primary);cursor:inherit}
+.dsh-del-batch-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsh-del-batch-tag{flex:none;color:var(--dsw-alias-label-caption);font-size:11px;line-height:16px}
+.dsh-del-batch-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+.dsh-del-batch-skipped{margin:0;padding-inline-start:16px;color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:18px;word-break:break-word}
 `;
 
 		function TrashIcon() {
@@ -172,6 +221,279 @@ window.__ModuleLoader__.load({
 					h("span", { className: "dsh-del-menu-icon" }, h(TrashIcon, {})),
 					h("span", { className: "dsh-del-menu-label" }, t("deleteSession")),
 					h("span", { className: "dsh-del-menu-keys", "aria-hidden": "true" }, keys),
+				),
+			);
+		}
+
+		/** 菜单里的「批量删除…」入口，排在单删项之后。 */
+		function BatchDeleteMenuItem(props) {
+			const { useMenuOpenState, useShortcuts, requestBatchDelete } = props;
+			const t = makeTranslator(props.t);
+
+			const useMenu = typeof useMenuOpenState === "function" ? useMenuOpenState : NOOP_HOOK;
+			const menuState = useMenu();
+			const setMenuOpen =
+				Array.isArray(menuState) && typeof menuState[1] === "function" ? menuState[1] : null;
+
+			const useShortcutRow = typeof useShortcuts === "function" ? useShortcuts : NOOP_HOOK;
+			const row = useShortcutRow((rows) =>
+				Array.isArray(rows) ? rows.find((item) => item.id === BATCH_SHORTCUT_ID) : undefined,
+			);
+			const keys =
+				row !== undefined && row !== null && typeof row.keys === "string" && row.keys !== ""
+					? row.keys
+					: BATCH_SHORTCUT_FALLBACK.keys;
+
+			return h(
+				"div",
+				{ className: "dsh-del-menu-wrap" },
+				h(
+					"button",
+					{
+						type: "button",
+						role: "menuitem",
+						className: "dsh-del-menu-item",
+						"aria-keyshortcuts": BATCH_SHORTCUT_FALLBACK.aria,
+						onClick: () => {
+							if (setMenuOpen !== null) setMenuOpen(false);
+							requestBatchDelete();
+						},
+					},
+					h("span", { className: "dsh-del-menu-icon" }, h(TrashIcon, {})),
+					h("span", { className: "dsh-del-menu-label" }, t("batchDelete")),
+					h("span", { className: "dsh-del-menu-keys", "aria-hidden": "true" }, keys),
+				),
+			);
+		}
+
+		/** 批量删除弹窗：勾选列表 + 计数 + 逐条失败回报。 */
+		function BatchDeleteDialog(props) {
+			const { settleBatch, deleteSessions, listSessions } = props;
+			const t = makeTranslator(props.t);
+
+			const useBatch =
+				typeof props.usePendingBatch === "function" ? props.usePendingBatch : NOOP_HOOK;
+			const request = useBatch(identitySelector);
+			const open = request !== null && request !== undefined && request.open === true;
+
+			const [rows, setRows] = React.useState([]);
+			const [selected, setSelected] = React.useState([]);
+			const [busy, setBusy] = React.useState(false);
+			const [error, setError] = React.useState(null);
+			const [skipped, setSkipped] = React.useState([]);
+			const busyRef = React.useRef(false);
+			const dialogRef = React.useRef(null);
+
+			const refresh = () => {
+				try {
+					const list = typeof listSessions === "function" ? listSessions() : [];
+					setRows(Array.isArray(list) ? list : []);
+				} catch (failure) {
+					setRows([]);
+					setError(failure instanceof Error ? failure.message : String(failure));
+				}
+			};
+
+			React.useEffect(() => {
+				if (!open) return;
+				busyRef.current = false;
+				setBusy(false);
+				setError(null);
+				setSkipped([]);
+				setSelected([]);
+				refresh();
+			}, [open]);
+
+			React.useEffect(() => {
+				if (!open) return undefined;
+				const onKeyDown = (event) => {
+					if (event.key !== "Escape") return;
+					event.preventDefault();
+					event.stopPropagation();
+					if (busyRef.current) return;
+					batchPending.set(null);
+				};
+				document.addEventListener("keydown", onKeyDown, true);
+				const node = dialogRef.current;
+				if (node !== null && typeof node.focus === "function") node.focus();
+				return () => document.removeEventListener("keydown", onKeyDown, true);
+			}, [open]);
+
+			if (!open) return null;
+
+			const close = () => {
+				if (busyRef.current) return;
+				if (typeof settleBatch === "function") settleBatch();
+				else batchPending.set(null);
+			};
+
+			const toggle = (id) => {
+				if (busyRef.current) return;
+				setSelected((prev) => {
+					if (prev.includes(id)) return prev.filter((item) => item !== id);
+					if (prev.length >= MAX_BATCH) return prev;
+					return [...prev, id];
+				});
+			};
+
+			const confirm = () => {
+				if (busyRef.current || selected.length === 0) return;
+				const ids = selected.slice();
+				busyRef.current = true;
+				setBusy(true);
+				setError(null);
+				setSkipped([]);
+				Promise.resolve()
+					.then(() => deleteSessions(ids))
+					.then(
+						(value) => {
+							busyRef.current = false;
+							setBusy(false);
+							const failed = Array.isArray(value?.skipped) ? value.skipped : [];
+							const done = Array.isArray(value?.deleted) ? value.deleted.length : 0;
+							if (failed.length === 0) {
+								if (typeof settleBatch === "function") settleBatch();
+								else batchPending.set(null);
+								return;
+							}
+							setSkipped(failed);
+							setSelected([]);
+							refresh();
+							if (done === 0) setError(t("batchAllFailed"));
+						},
+						(reason) => {
+							busyRef.current = false;
+							setBusy(false);
+							setError(reason instanceof Error ? reason.message : String(reason));
+						},
+					);
+			};
+
+			const selectable = rows.filter((row) => row.current !== true && row.blank !== true);
+			const atLimit = selected.length >= MAX_BATCH;
+
+			return h(
+				"div",
+				{ className: "dsh-del-modal-root", role: "presentation" },
+				h("div", { className: "dsh-del-modal-mask", "aria-hidden": "true", onClick: close }),
+				h(
+					"div",
+					{
+						ref: dialogRef,
+						className: "dsh-del-modal",
+						role: "dialog",
+						"aria-modal": "true",
+						"aria-label": t("batchTitle"),
+						tabIndex: -1,
+					},
+					h(
+						"div",
+						{ className: "dsh-del-modal-header" },
+						h("h2", { className: "dsh-del-modal-title" }, t("batchTitle")),
+						h(
+							"button",
+							{
+								type: "button",
+								className: "dsh-del-modal-close",
+								"aria-label": t("close"),
+								onClick: close,
+							},
+							"\u00d7",
+						),
+					),
+					h(
+						"div",
+						{ className: "dsh-del-modal-body" },
+						selectable.length === 0
+							? h("div", { className: "dsh-del-modal-hint" }, t("batchEmpty"))
+							: h("div", null, t("batchDesc")),
+						selectable.length === 0
+							? null
+							: h(
+									"div",
+									{ className: "dsh-del-batch-list", role: "group" },
+									...rows.map((row) => {
+										const disabled = row.current === true || row.blank === true;
+										const checked = selected.includes(row.id);
+										const blocked = !disabled && !checked && atLimit;
+										return h(
+											"label",
+											{
+												key: row.id,
+												className:
+													"dsh-del-batch-row" + (disabled || blocked ? " is-disabled" : ""),
+											},
+											h("input", {
+												type: "checkbox",
+												className: "dsh-del-batch-check",
+												checked,
+												disabled: disabled || blocked || busy,
+												onChange: () => toggle(row.id),
+											}),
+											h("span", { className: "dsh-del-batch-name" }, row.title),
+											row.current === true
+												? h("span", { className: "dsh-del-batch-tag" }, t("batchCurrent"))
+												: row.blank === true
+													? h("span", { className: "dsh-del-batch-tag" }, t("batchBlank"))
+													: null,
+										);
+									}),
+								),
+						selectable.length === 0
+							? null
+							: h(
+									"div",
+									{ className: "dsh-del-batch-meta" },
+									h("span", null, t("batchTotal", { total: rows.length })),
+									h("span", null, t("batchCount", { count: selected.length, max: MAX_BATCH })),
+								),
+						selectable.length === 0 || !atLimit
+							? null
+							: h("div", { className: "dsh-del-modal-hint" }, t("batchLimit", { max: MAX_BATCH })),
+						skipped.length === 0
+							? null
+							: h(
+									"div",
+									null,
+									h("div", { className: "dsh-del-modal-error" }, t("batchSkipped", { count: skipped.length })),
+									h(
+										"ul",
+										{ className: "dsh-del-batch-skipped" },
+										...skipped.map((item) =>
+											h("li", { key: item.sessionId }, item.message),
+										),
+									),
+								),
+						error === null
+							? null
+							: h("div", { className: "dsh-del-modal-error", role: "alert" }, t("failed") + "：" + error),
+					),
+					h(
+						"div",
+						{ className: "dsh-del-modal-footer" },
+						h(
+							"button",
+							{
+								type: "button",
+								className: "dsh-del-btn dsh-del-btn-outline",
+								disabled: busy,
+								onClick: close,
+							},
+							t("cancel"),
+						),
+						h(
+							"button",
+							{
+								type: "button",
+								className: "dsh-del-btn dsh-del-btn-danger",
+								disabled: busy || selected.length === 0,
+								onClick: confirm,
+							},
+							busy
+								? t("batchDeleting", { count: selected.length })
+								: t("batchConfirm", { count: selected.length }),
+						),
+					),
 				),
 			);
 		}
@@ -361,12 +683,66 @@ window.__ModuleLoader__.load({
 				pending.set({ sessionId, title });
 			};
 
+			/** 取路径最后一段当标题兜底（兼容 `/` 和 `\`）。 */
+			const titleFromPath = (value) => {
+				if (typeof value !== "string" || value === "") return "";
+				const parts = value.split(/[\\/]+/).filter((part) => part !== "");
+				return parts.length === 0 ? "" : parts[parts.length - 1];
+			};
+
+			/**
+			 * 列出所有会话，供批量删除弹窗勾选。
+			 *
+			 * 标题优先用 `title`，其次工作目录名，最后会话 id。
+			 * `current` 标记「当前正在看的会话」——弹窗里禁用，删了界面会崩。
+			 */
+			const collectSessions = () => {
+				const sessions = ctx.get("sessions");
+				if (sessions === undefined || sessions === null) return [];
+
+				let snapshot;
+				try {
+					snapshot = sessions.list.getSnapshot();
+				} catch {
+					return [];
+				}
+				const byId = snapshot === null || snapshot === undefined ? undefined : snapshot.byId;
+				if (byId === null || byId === undefined || typeof byId !== "object") return [];
+
+				const rows = [];
+				for (const row of Object.values(byId)) {
+					if (row === null || row === undefined || typeof row.id !== "string") continue;
+					const raw = typeof row.title === "string" ? row.title.trim() : "";
+					rows.push({
+						id: row.id,
+						title: raw !== "" ? raw : titleFromPath(row.cwd) || row.id,
+						current: (row.retainedBy?.mainView ?? 0) > 0,
+						blank: row.blank === true,
+					});
+				}
+				rows.sort((a, b) => (a.title < b.title ? -1 : a.title > b.title ? 1 : 0));
+				return rows;
+			};
+
+			const requestBatchDelete = () => {
+				batchPending.set({ open: true });
+			};
+
 			const menuInjected = () => ({ requestDelete });
+
+			const menuBatchInjected = () => ({ requestBatchDelete });
 
 			const dialogInjected = () => ({
 				deleteSession: (sessionId) => call("delete", { sessionId }),
 				settleDelete: () => pending.set(null),
 				hooks: { pendingDelete: pending },
+			});
+
+			const batchDialogInjected = () => ({
+				deleteSessions: (sessionIds) => call("deleteMany", { sessionIds }),
+				settleBatch: () => batchPending.set(null),
+				listSessions: collectSessions,
+				hooks: { pendingBatch: batchPending },
 			});
 
 			try {
@@ -387,6 +763,23 @@ window.__ModuleLoader__.load({
 			}
 
 			try {
+				ctx.slots.inject("sidebar.workspaces.session.menu.item", () =>
+					ctx.slots.register(
+						{
+							name: "sidebar.workspaces.session.menu.item",
+							id: "dsh-delete.session-delete-many",
+							order: 501,
+							locale: NS,
+							inject: menuBatchInjected,
+						},
+						BatchDeleteMenuItem,
+					),
+				);
+			} catch (error) {
+				fail("注册批量删除菜单项", error);
+			}
+
+			try {
 				ctx.slots.inject("shell.overlay", () =>
 					ctx.slots.register(
 						{
@@ -400,6 +793,22 @@ window.__ModuleLoader__.load({
 				);
 			} catch (error) {
 				fail("注册确认框", error);
+			}
+
+			try {
+				ctx.slots.inject("shell.overlay", () =>
+					ctx.slots.register(
+						{
+							name: "shell.overlay",
+							id: "dsh-delete.batch",
+							locale: NS,
+							inject: batchDialogInjected,
+						},
+						BatchDeleteDialog,
+					),
+				);
+			} catch (error) {
+				fail("注册批量删除弹窗", error);
 			}
 
 			const currentSession = () => {
@@ -455,7 +864,44 @@ window.__ModuleLoader__.load({
 				fail("安装快捷键", error);
 			}
 
-			console.info("[dsh-delete] 已挂载：菜单项 + 确认框 + Ctrl+Alt+D");
+			try {
+				ctx.effect(() => {
+					try {
+						return ctx.shortcuts.register({
+							id: BATCH_SHORTCUT_ID,
+							label: () => t("batchDelete"),
+							aliases: ["delete many sessions", "batch delete conversations"],
+							defaults: {
+								"desktop:windows": { code: "KeyD", modifiers: ["primary", "alt", "shift"] },
+								"desktop:macos": { code: "KeyD", modifiers: ["primary", "alt", "shift"] },
+								"desktop:linux": { code: "KeyD", modifiers: ["primary", "alt", "shift"] },
+								"web:windows": { code: "KeyD", modifiers: ["primary", "alt", "shift"] },
+								"web:macos": { code: "KeyD", modifiers: ["primary", "alt", "shift"] },
+							},
+
+							regions: ["page"],
+							modals: [],
+							resolve: (context) => {
+								if (context.modal !== null && context.modal !== undefined) {
+									return { status: "blocked", reason: t("noSession") };
+								}
+								return {
+									status: "handled",
+									run: () => requestBatchDelete(),
+								};
+							},
+						});
+					} catch (error) {
+
+						console.error("[dsh-delete] 批量删除快捷键注册失败（菜单项仍然可用）:", error);
+						return () => {};
+					}
+				}, "dsh-delete: 批量删除快捷键");
+			} catch (error) {
+				fail("安装批量删除快捷键", error);
+			}
+
+			console.info("[dsh-delete] 已挂载：菜单项 ×2 + 确认框 + 批量弹窗 + Ctrl+Alt+D / Ctrl+Alt+Shift+D");
 		}
 
 		exports.apply = apply;
